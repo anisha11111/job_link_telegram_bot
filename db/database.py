@@ -1,5 +1,5 @@
 """
-db/database.py — Skill + Company filtering (location removed)
+db/database.py — Skill + Company filtering
 """
 
 import aiosqlite
@@ -84,42 +84,114 @@ async def save_job(job):
             return False
 
 
-# ─────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # SKILL KEYWORDS
-# ─────────────────────────────────────────────────────
+# Problem: jobs stored as "Software Engineer" or "Software Developer" in title
+# but user searches "Full Stack" or "Backend" — no match.
+# Fix: each skill now includes ALL common job title variations that belong to it.
+# ─────────────────────────────────────────────────────────────────────────────
 SKILL_KEYWORDS = {
-    "Python":       ["python"],
-    "Java":         ["java", "spring", "kotlin"],
-    "JavaScript":   ["javascript", "typescript"],
-    "React":        ["react", "next.js", "nextjs"],
-    "Node.js":      ["node.js", "nodejs", "node", "express"],
-    "Data Science": ["data science", "data scientist", "data analyst"],
-    "ML/AI":        ["machine learning", "deep learning", "nlp", "llm", "ai engineer"],
-    "DevOps":       ["devops", "sre", "kubernetes", "docker", "infrastructure"],
-    "Testing/QA":   ["qa", "quality assurance", "test engineer", "sdet"],
-    "Android":      ["android"],
-    "iOS":          ["ios", "swift"],
-    "Full Stack":   ["full stack", "fullstack", "full-stack"],
-    "Frontend":     ["frontend", "front-end"],
-    "Backend":      ["backend", "back-end"],
-    "Any":          [],
+    "Python": [
+        "python",
+        "software engineer", "software developer", "sde ", "swe ",
+        "backend engineer", "backend developer",
+    ],
+    "Java": [
+        "java", "spring", "spring boot", "kotlin",
+        "software engineer", "software developer", "sde ", "swe ",
+        "backend engineer", "backend developer",
+    ],
+    "JavaScript": [
+        "javascript", "typescript",
+        "software engineer", "software developer",
+        "frontend engineer", "frontend developer", "web developer",
+    ],
+    "React": [
+        "react", "next.js", "nextjs", "react native",
+        "frontend engineer", "frontend developer",
+        "ui engineer", "software engineer",
+    ],
+    "Node.js": [
+        "node.js", "nodejs", "node", "express",
+        "backend engineer", "backend developer",
+        "software engineer", "software developer",
+    ],
+    "Data Science": [
+        "data scientist", "data science", "data analyst",
+        "analytics engineer", "business analyst",
+        "data engineer", "research scientist",
+    ],
+    "ML/AI": [
+        "machine learning", "deep learning", "nlp", "llm",
+        "ai engineer", "ml engineer", "research engineer",
+        "applied scientist", "research scientist", "artificial intelligence",
+    ],
+    "DevOps": [
+        "devops", "site reliability", "sre",
+        "platform engineer", "infrastructure engineer",
+        "cloud engineer", "kubernetes", "docker",
+        "software engineer", "systems engineer",
+    ],
+    "Testing/QA": [
+        "qa engineer", "quality assurance", "test engineer",
+        "sdet", "automation engineer", "qa analyst",
+        "software engineer in test",
+    ],
+    "Android": [
+        "android", "android developer", "android engineer",
+        "mobile developer", "mobile engineer",
+        "software engineer", "software developer",
+    ],
+    "iOS": [
+        "ios", "ios developer", "ios engineer",
+        "swift developer", "swift engineer",
+        "mobile developer", "mobile engineer",
+        "software engineer", "software developer",
+    ],
+    "Full Stack": [
+        "full stack", "fullstack", "full-stack",
+        "software engineer", "software developer",
+        "sde", "swe", "web developer", "web engineer",
+        "developer", "engineer",                        # ← catches "Software Developer", "Software Engineer"
+    ],
+    "Frontend": [
+        "frontend", "front-end", "front end",
+        "ui engineer", "ui developer",
+        "web developer", "web engineer",
+        "software engineer", "software developer",
+    ],
+    "Backend": [
+        "backend", "back-end", "back end",
+        "server engineer", "api engineer",
+        "software engineer", "software developer",
+        "sde", "swe", "systems engineer",
+        "developer", "engineer",
+    ],
+    "Any": [],
 }
 
 
 def _skill_filter(skill: str):
+    """Build SQL WHERE clause for skill — searches both title and category."""
     if skill == "Any":
         return "1=1", []
+
     keywords = SKILL_KEYWORDS.get(skill, [skill.lower()])
+    if not keywords:
+        return "1=1", []
+
     parts, params = [], []
     for kw in keywords:
-        parts.append("LOWER(category) LIKE ?")
-        params.append(f"%{kw}%")
         parts.append("LOWER(title) LIKE ?")
         params.append(f"%{kw}%")
+        parts.append("LOWER(category) LIKE ?")
+        params.append(f"%{kw}%")
+
     return "(" + " OR ".join(parts) + ")", params
 
 
 def _company_filter(company: str):
+    """Build SQL WHERE clause for company name matching."""
     if company == "Any":
         return "1=1", []
     aliases = COMPANY_ALIASES.get(company, [company.lower()])
@@ -137,6 +209,7 @@ async def search_jobs(skill: str, company: str, limit: int = 8):
         skill_sql,   skill_params   = _skill_filter(skill)
         company_sql, company_params = _company_filter(company)
 
+        # Primary: skill + company
         query = f"""
             SELECT title, company, location, category, apply_link, source
             FROM jobs
@@ -144,22 +217,17 @@ async def search_jobs(skill: str, company: str, limit: int = 8):
             ORDER BY rowid DESC
             LIMIT ?
         """
-        params = skill_params + company_params + [limit]
-        cursor = await db.execute(query, params)
+        cursor = await db.execute(query, skill_params + company_params + [limit])
         rows   = await cursor.fetchall()
 
-        # Fallback: if company has no results, show skill-only across all companies
+        # Fallback: if specific company has no match, search skill across all companies
         if not rows and company != "Any":
-            print(f"[search] No '{skill}' jobs at {company}, showing all companies...")
-            fallback = f"""
-                SELECT title, company, location, category, apply_link, source
-                FROM jobs
-                WHERE {skill_sql}
-                ORDER BY rowid DESC
-                LIMIT ?
-            """
-            cursor = await db.execute(fallback, skill_params + [limit])
-            rows   = await cursor.fetchall()
+            print(f"[search] No '{skill}' at {company} — showing all companies")
+            cursor = await db.execute(
+                f"SELECT title, company, location, category, apply_link, source FROM jobs WHERE {skill_sql} ORDER BY rowid DESC LIMIT ?",
+                skill_params + [limit]
+            )
+            rows = await cursor.fetchall()
 
         return [
             {"title": r[0], "company": r[1], "location": r[2],
@@ -184,8 +252,7 @@ async def get_unnotified_jobs(chat_id: int, skill: str, company: str):
             ORDER BY rowid DESC
             LIMIT 5
         """
-        params = [chat_id] + skill_params + company_params
-        cursor = await db.execute(query, params)
+        cursor = await db.execute(query, [chat_id] + skill_params + company_params)
         rows   = await cursor.fetchall()
         return [{"id": r[0], "title": r[1], "company": r[2],
                  "location": r[3], "apply_link": r[4]} for r in rows]
