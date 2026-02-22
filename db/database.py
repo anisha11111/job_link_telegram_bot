@@ -130,7 +130,7 @@ SKILL_KEYWORDS = {
         "devops", "site reliability", "sre",
         "platform engineer", "infrastructure engineer",
         "cloud engineer", "kubernetes", "docker",
-        "software engineer", "systems engineer",
+        
     ],
     "Testing/QA": [
         "qa engineer", "quality assurance", "test engineer",
